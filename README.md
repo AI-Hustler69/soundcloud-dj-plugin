@@ -9,6 +9,7 @@ A **Claude Code plugin** and **MCP (Model Context Protocol) server** for the off
 - Check a **SoundCloud playlist or label set** to see which tracks can be downloaded.
 - Flag "free download" links that go through **download gates** (Hypeddit, ToneDen). They are reported, never bypassed.
 - A **DJ set builder skill** (`dj-crate`) that orders tracks by tempo and **harmonic mixing** rules (Camelot wheel) and suggests transitions.
+- An **automix skill** (`dj-automix`, prototype) that beat-matches the tracks you downloaded into one continuous mix with phrase-aligned, bass-swap transitions, plus a tracklist and cue sheet.
 - Works in **Claude Code**, **Claude Desktop**, **OpenAI Codex** and any other MCP client. A limited mode works without API keys.
 
 **Quick install** (Claude Code):
@@ -18,10 +19,11 @@ A **Claude Code plugin** and **MCP (Model Context Protocol) server** for the off
 /plugin install soundcloud-dj@soundcloud-dj-tools
 ```
 
-The plugin has two parts:
+The plugin has three parts:
 
 - **MCP server (connector)** `soundcloud`: four read-only tools (`search_tracks`, `get_track`, `get_playlist`, `resolve_url`) on top of the **official SoundCloud API**.
 - **Skill** `dj-crate`: a workflow that tells Claude how to find candidates, check download flags and licenses, order the tracks by BPM and Camelot key, and present the set with links and license notes.
+- **Skill** `dj-automix` (prototype): runs the bundled Python tool [`automix/`](automix/README.md) on **local files you already have** and renders a beat-matched mix. It never downloads anything.
 
 > Not affiliated with or endorsed by SoundCloud. You need **your own SoundCloud API credentials** and you must follow SoundCloud's terms (see [What this plugin does not do](#what-this-plugin-does-not-do)).
 
@@ -226,6 +228,28 @@ You can also call the skill directly with `/soundcloud-dj:dj-crate`.
 
 The skill returns a numbered table with these columns: Artist – Title, BPM, key (Camelot), length, a transition note, the link (the track page, where SoundCloud's Download button is, or the artist's external link, with gated links marked) and the license verdict. After the table it lists the dropped tracks and repeats the license reminder.
 
+## Automix: from crate to mix (prototype)
+
+Once you have downloaded the tracks with SoundCloud's own Download button (or have other files you are allowed to use), ask Claude to mix them:
+
+- "Mix these four files into a continuous set: ~/music/a.mp3, ~/music/b.mp3, ~/music/c.mp3, ~/music/d.mp3."
+- "Turn the crate you just built into a mix. The downloaded files are in ~/Downloads/crate."
+
+The `dj-automix` skill sets up the tool on first use and then:
+1. measures each track's tempo, beat grid and key;
+2. time-stretches all tracks to one tempo without changing pitch;
+3. blends them on 8-bar phrase boundaries with a 16-bar bass-swap transition;
+4. writes `mix.mp3`, `mix.wav`, a tracklist, a `.cue` file and a JSON report with the measured kick alignment of every transition.
+
+It needs Python 3.11+ and ffmpeg built with `rubberband`. You can also run it by hand or try a demo without any music; see [`automix/README.md`](automix/README.md).
+
+It is a prototype:
+- it assumes constant-tempo 4/4 music with a kick on the downbeat (drum & bass, house, techno);
+- keys estimated from audio can be wrong, so keys from SoundCloud metadata are preferred;
+- it picks mix points by phrase structure, not by taste.
+
+Listen before you publish, and remember that every track's license has to allow it.
+
 ## "Free download" does not mean free to use in public
 
 A free download on SoundCloud usually only lets **you** have the file for **personal use**. Before you publish, stream or monetise a mix (SoundCloud, Mixcloud, YouTube, Twitch, a paid gig):
@@ -262,6 +286,7 @@ npm run list-tools
 - `npm test` runs the vitest suite. Every test uses a scripted, mocked `fetch`, and a global setup makes any real network call fail. **No test calls the SoundCloud API.**
 - `npm run list-tools` starts the bundled server over stdio, does the MCP handshake and prints the tools.
 - `node scripts/smoke.mjs <tool> '<json-args>'` calls one tool against the **real** SoundCloud service, for example `node scripts/smoke.mjs get_track '{"track":"https://soundcloud.com/forss/flickermood"}'`. It is a manual check and is not part of `npm test`.
+- automix has its own Python test suite on synthetic audio: `cd automix && .venv/bin/python -m pytest -q tests` (see [`automix/README.md`](automix/README.md)).
 
 Project layout:
 
@@ -270,6 +295,8 @@ Project layout:
 .claude-plugin/marketplace.json  single-plugin marketplace (this repo)
 .mcp.json                        starts dist/server.js with your env credentials
 skills/dj-crate/SKILL.md         DJ crate workflow
+skills/dj-automix/SKILL.md       runs automix on local files
+automix/                         Python automix prototype (analysis, stretch, mixer, tests)
 src/
   index.ts                       stdio entry point
   server.ts                      MCP tool registration (zod schemas)
