@@ -64,77 +64,167 @@ def _refine_grid(onset_env: np.ndarray, sr: int, bpm: float, search: float = 0.6
     return best[1], best[2]
 
 
+def _scan_tempo(onset_env: np.ndarray, sr: int, lo: float, hi: float, step: float = 0.05) -> float:
+    """Tempo in [lo, hi] whose best-phase beat grid carries the most onset energy."""
+    fps = sr / HOP
+    t_end = len(onset_env) / fps
+    best = (-1.0, (lo + hi) / 2)
+    for cand in np.arange(lo, hi + 1e-9, step):
+        period = 60.0 / cand
+        n_beats = int((t_end - period) / period)
+        if n_beats < 4:
+            continue
+        base = np.arange(n_beats) * period
+        phases = np.arange(0, period, 0.004)
+        idx = np.round((phases[:, None] + base[None, :]) * fps).astype(int)
+        idx = np.clip(idx, 0, len(onset_env) - 1)
+        score = float(onset_env[idx].mean(axis=1).max())
+        if score > best[0]:
+            best = (score, cand)
+    return best[1]
+
+
 def _attack_envelope(y: np.ndarray, sr: int) -> np.ndarray:
+    """Rise of the low-band (< 160 Hz) envelope: large where a kick starts."""
     from scipy.signal import butter, sosfiltfilt
 
-    sos = butter(4, 160, btype="lowpass", fs=sr, output="sos")
+    env = _low_envelope(y, sr)
+    return np.diff(env, prepend=env[0]).clip(min=0)
+
+
+def _low_envelope(y: np.ndarray, sr: int) -> np.ndarray:
+    from scipy.signal import butter, sosfiltfilt
+
+    # 400 Hz keeps the kick's initial (higher-pitched) click; a lower cutoff sees the
+    # attack late because kick pitch sweeps downward.
+    sos = butter(4, 400, btype="lowpass", fs=sr, output="sos")
     env = np.abs(sosfiltfilt(sos, y))
     win = int(0.002 * sr)
     return np.convolve(env, np.ones(win) / win, mode="same")
 
 
-def _fit_downbeats(y: np.ndarray, sr: int, first: float, period: float, with_score: bool = False):
-    """Refine the downbeat grid to sample accuracy.
+FINE_HOP = 32  # ~0.7 ms at 44.1 kHz
+FLUX_LAG = 0.003  # seconds
 
-    For every bar, find the kick attack (first point where the low-band envelope
-    reaches half of its local peak) within +-60 ms of the predicted downbeat, then
-    fit time = intercept + slope * bar with outlier rejection.
+
+def transient_envelope(y: np.ndarray, sr: int) -> np.ndarray:
+    """Broadband spectral flux at ~0.7 ms resolution: sharp at kick and snare transients,
+    unaffected by sustained (even heavily distorted) bass."""
+    return librosa.onset.onset_strength(y=y, sr=sr, hop_length=FINE_HOP, n_fft=1024, center=True)
+
+
+def _fine_phase(y: np.ndarray, sr: int, grid0: float, period: float, window: float = 0.02) -> float:
+    """Shift (s) of a beat grid that maximises mean transient energy on every beat."""
+    flux = transient_envelope(y, sr)
+    fps = sr / FINE_HOP
+    n_beats = int((len(y) / sr - grid0 - window) // period)
+    if n_beats < 8:
+        return 0.0
+    beats = grid0 + np.arange(n_beats) * period
+    offsets = np.arange(-window, window + 1e-9, 0.00025)
+    pos = (beats[None, :] + offsets[:, None]) * fps
+    pos = np.clip(pos, 0, len(flux) - 1.001)
+    i0 = np.floor(pos).astype(int)
+    frac = pos - i0
+    vals = flux[i0] * (1 - frac) + flux[i0 + 1] * frac
+    # Spectral flux peaks ~3 ms after a transient starts (measured on synthetic kicks with
+    # known onsets); remove that constant lag so downbeats mark the attack start.
+    return float(offsets[int(np.argmax(vals.mean(axis=1)))]) - FLUX_LAG
+
+
+def _onset_offset(env: np.ndarray, sr: int, grid: np.ndarray) -> float:
+    """Median offset (s) of the kick attack start relative to grid points.
+
+    Per bar: peak of the envelope within -10..+25 ms of the grid point, then the first
+    sample (from -10 ms) reaching half of that peak. The window is far tighter than a
+    16th note, so off-beat bass stabs cannot land in it.
     """
-    env = _attack_envelope(y, sr)
-    win = int(0.06 * sr)
-    # Allow a downbeat in the first 60 ms (or slightly before 0 due to estimation error).
-    while first - 4 * period > -0.06:
-        first -= 4 * period
-    bars: list[int] = []
-    times: list[float] = []
-    peaks_found: list[float] = []
-    icpt, slope = first, 4 * period
-    k = 0
-    while True:
-        # Track bar by bar: predict from the fit so far, so a slightly wrong
-        # initial tempo cannot walk the search window off the kick.
-        t = icpt + slope * k
-        c = int(round(t * sr))
-        if c + win >= len(env):
-            break
-        lo = max(0, c - win)
-        seg = env[lo : c + win]
-        peak = seg.max()
-        if peak > 3 * np.median(env[max(0, c - 4 * win) : c + 4 * win]) + 1e-6:
-            ip = int(np.argmax(seg))
-            above = np.nonzero(seg[: ip + 1] >= 0.5 * peak)[0]
-            onset = (lo + int(above[0])) / sr if len(above) else t
-            bars.append(k)
-            times.append(onset)
-            peaks_found.append(float(peak))
-            if len(bars) >= 3:
-                b, tt = np.array(bars, float), np.array(times)
-                slope, icpt = np.polyfit(b, tt, 1)
-                resid = np.abs(tt - (icpt + slope * b))
-                keep = resid < max(0.004, 3 * np.median(resid))
-                if not keep.all() and keep.sum() >= 3:
-                    slope, icpt = np.polyfit(b[keep], tt[keep], 1)
-        k += 1
-    if len(bars) < 4:
-        return (first, period, 0.0) if with_score else (first, period)
-    peaks = {k_: p_ for k_, p_ in zip(bars, peaks_found)}
-    b, tt = np.array(bars, float), np.array(times)
-    for _ in range(3):  # final outlier rejection over all bars
-        slope, icpt = np.polyfit(b, tt, 1)
-        resid = np.abs(tt - (icpt + slope * b))
-        keep = resid < max(0.004, 3 * np.median(resid))
-        if keep.all() or keep.sum() < 4:
-            break
-        b, tt = b[keep], tt[keep]
-    slope, icpt = np.polyfit(b, tt, 1)
-    # Report the first bar where a kick was actually found (not a grid point in leading silence).
-    first_found = icpt + slope * b[0]
-    if not with_score:
-        return float(first_found), float(slope / 4)
-    # Score: how many bars carry a strong, well-aligned attack (kicks on "1" score highest).
-    resid = np.abs(tt - (icpt + slope * b))
-    score = float(sum(peaks[int(k_)] for k_, r_ in zip(b, resid) if r_ < 0.004))
-    return float(first_found), float(slope / 4), score
+    pre, post = int(0.010 * sr), int(0.025 * sr)
+    offs, peaks = [], []
+    for g in grid:
+        c = int(round(g * sr))
+        if c - pre < 0 or c + post >= len(env):
+            continue
+        seg = env[c - pre : c + post]
+        ip = int(np.argmax(seg))
+        pk = seg[ip]
+        base = seg[: max(1, ip)].min()
+        if pk <= base * 1.5 + 1e-9:
+            continue
+        above = np.nonzero(seg[: ip + 1] >= base + 0.5 * (pk - base))[0]
+        offs.append((int(above[0]) - pre) / sr)
+        peaks.append(pk)
+    if len(offs) < 3:
+        return 0.0
+    offs, peaks = np.array(offs), np.array(peaks)
+    strong = peaks >= 0.5 * np.median(peaks)
+    return float(np.median(offs[strong])) if strong.sum() >= 3 else float(np.median(offs))
+
+
+def _fit_downbeats(y: np.ndarray, sr: int, first: float, period: float, with_score: bool = False,
+                   window: float = 0.03, tempo_search: float = 0.0, phases: int = 1):
+    """Sample-accurate downbeat grid by aligning bar positions with low-band attacks.
+
+    Searches a phase offset within +-``window`` seconds of ``first`` (and, with
+    ``phases=4``, each of the four beats as the candidate "1"; with
+    ``tempo_search``, tempo within +-that many BPM) for the grid whose bar
+    positions carry the highest *average* kick-attack energy over the whole file.
+    Averaging over every bar is what keeps loud, syncopated bass stabs (jump up,
+    neuro) from posing as kicks: they do not repeat exactly on the downbeat.
+
+    Returns (first_downbeat, period[, score]); first_downbeat is the first bar
+    where a kick is actually present, not a grid point in leading silence.
+    """
+    att = _attack_envelope(y, sr)
+    n = len(att)
+    bpm0 = 60.0 / period
+    tempi = [bpm0] if tempo_search <= 0 else list(np.arange(bpm0 - tempo_search, bpm0 + tempo_search + 1e-9, 0.002))
+    offsets = np.arange(-window, window + 1e-9, 0.0005)
+    best = (-1.0, first, period)
+    for bpm in tempi:
+        per = 60.0 / bpm
+        bar = 4 * per
+        for k in range(phases):
+            base = first + k * per
+            base -= np.floor((base + window) / bar) * bar  # earliest grid point near the file start
+            nb = int((n / sr - base - window) // bar)
+            if nb < 2:
+                continue
+            grid = base + np.arange(nb) * bar
+            # Kick attack energy, max within +-1 ms of each grid point, averaged over all bars.
+            idx = np.round((grid[None, :] + offsets[:, None]) * sr).astype(int)
+            ok = (idx >= 0) & (idx < n - 45)
+            vals = np.zeros(idx.shape)
+            for j in range(-44, 45, 11):  # small tolerance window (+-1 ms)
+                vals = np.maximum(vals, np.where(ok, att[np.clip(idx + j, 0, n - 1)], 0.0))
+            scores = vals.sum(axis=1) / max(1, nb)
+            i = int(np.argmax(scores))
+            if scores[i] > best[0]:
+                best = (float(scores[i]), float(base + offsets[i]), per)
+    score, grid0, per = best
+    bar = 4 * per
+    # Sub-millisecond phase from broadband transients on every beat (kick and snare),
+    # which stays precise even when the low end is full of distorted bass.
+    grid0 += _fine_phase(y, sr, grid0, per)
+    # First bar that actually carries a kick (skip leading silence / beatless intros).
+    first_found = grid0
+    nb = int((n / sr - grid0) // bar)
+    if nb > 0:
+        idx = np.clip(np.round((grid0 + np.arange(nb) * bar) * sr).astype(int), 0, n - 1)
+        bar_n = int(bar * sr)
+        # A bar "has a kick" when the attack at its downbeat stands well above that bar's
+        # own typical attack level (so quiet drum-only intros count, silence does not).
+        hits = []
+        for b_, i in enumerate(idx):
+            peak = att[max(0, i - 44) : i + 45].max()
+            floor = np.median(att[i : min(n, i + bar_n)]) if i < n else 0.0
+            if peak > 0 and peak >= 6 * floor + 1e-7:
+                hits.append(b_)
+        if hits:
+            first_found = grid0 + hits[0] * bar
+    if with_score:
+        return float(first_found), float(per), float(score)
+    return float(first_found), float(per)
 
 
 def analyze(path: str | Path, bpm_range: tuple[float, float] = (160.0, 190.0), bpm_hint: float | None = None) -> TrackAnalysis:
@@ -143,12 +233,11 @@ def analyze(path: str | Path, bpm_range: tuple[float, float] = (160.0, 190.0), b
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP)
 
     if bpm_hint:
-        bpm0 = bpm_hint
+        bpm1 = bpm_hint
     else:
-        tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sr, hop_length=HOP, start_bpm=sum(bpm_range) / 2)
-        bpm0 = fold_tempo(float(np.atleast_1d(tempo)[0]), *bpm_range)
-    # Coarse grid first (fast), then a fine local refinement around it.
-    bpm1, _ = _refine_grid(onset_env, sr, bpm0, search=2.0) if not bpm_hint else (bpm0, 0.0)
+        # Scan the whole tempo range: librosa's own estimate can be off by a few BPM on
+        # dense, distorted tracks, and the on-beat onset energy peaks very sharply at the true tempo.
+        bpm1 = _scan_tempo(onset_env, sr, *bpm_range)
     bpm, phase = _refine_grid(onset_env, sr, bpm1, search=0.1)
     period = 60.0 / bpm
 
@@ -156,12 +245,9 @@ def analyze(path: str | Path, bpm_range: tuple[float, float] = (160.0, 190.0), b
     # Sample-accurate grid: fit each of the 4 beat phases as a candidate "1" and keep the
     # one whose bars carry the strongest aligned low-end attacks (the kick). Doing this
     # after fitting avoids picking a wrong beat when the coarse tempo is slightly off.
-    best = None
-    for k in range(4):
-        cand = _fit_downbeats(y, sr, phase + k * period, period, with_score=True)
-        if best is None or cand[2] > best[2]:
-            best = cand
-    first_downbeat, period, _ = best
+    # Which beat is "1", the exact phase and a final tempo touch-up, all from one
+    # alignment of the bar grid with low-band attacks averaged over the whole file.
+    first_downbeat, period = _fit_downbeats(y, sr, phase, period, window=0.03, tempo_search=0.04, phases=4)
     bpm = 60.0 / period
 
     # Key from harmonic content from C2 up, so the kick sub (~45 Hz) does not skew it.

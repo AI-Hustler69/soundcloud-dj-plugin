@@ -72,6 +72,15 @@ def test_analysis_tempo_and_downbeat(tmp_path, bpm, lead_in, root, minor, camelo
     assert a.bars >= 31
 
 
+@pytest.mark.parametrize("bpm,lead_in", [(165.0, 0.40), (174.0, 1.00), (172.0, 0.00)])
+def test_analysis_survives_distorted_jump_up_bass(tmp_path, bpm, lead_in):
+    """Loud, saturated off-beat bass stabs must not pull the grid (regression: 165 read as 169.4)."""
+    path = _write(tmp_path, "ju", SynthSpec(bpm, "F", True, bars=40, lead_in=lead_in, seed=int(bpm * 10), jumpup=True))
+    a = analyze(path)
+    assert a.bpm == pytest.approx(bpm, abs=0.05)
+    assert a.first_downbeat == pytest.approx(lead_in, abs=0.004)
+
+
 def test_analysis_key_estimate_majority(tmp_path):
     cases = [("A", True, "8A"), ("E", True, "9A"), ("C", False, "8B"), ("F#", True, "11A"), ("G", False, "9B"), ("A#", False, "6B")]
     hits = 0

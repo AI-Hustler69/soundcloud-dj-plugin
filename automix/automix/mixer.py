@@ -46,7 +46,8 @@ class Transition:
     end: float
     bars: int
     key_relation: str
-    measured_offset_ms: float | None = None
+    measured_offset_ms: float | None = None  # median over 4-bar chunks of the overlap
+    chunk_offsets_ms: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -91,17 +92,22 @@ def _ramp(n: int, a: int, b: int, rising: bool) -> np.ndarray:
 
 
 def _measure_offset_ms(a: np.ndarray, b: np.ndarray) -> float:
-    """Lag (ms) that best aligns the low-band attack envelopes of two equal-length signals."""
-    lo = butter(4, 150, btype="lowpass", fs=SR, output="sos")
-    ea = np.abs(sosfiltfilt(lo, a.mean(axis=1)))
-    eb = np.abs(sosfiltfilt(lo, b.mean(axis=1)))
-    ea = np.diff(ea, prepend=ea[0]).clip(min=0)
-    eb = np.diff(eb, prepend=eb[0]).clip(min=0)
-    max_lag = int(0.05 * SR)
-    c = correlate(ea, eb, mode="full", method="fft")
-    mid = len(eb) - 1
+    """Lag (ms) that best aligns the broadband transients (kicks and snares) of two equal-length signals.
+
+    Positive means b's beats land later than a's.
+    """
+    from .analysis import FINE_HOP, transient_envelope
+
+    fa = transient_envelope(a.mean(axis=1), SR)
+    fb = transient_envelope(b.mean(axis=1), SR)
+    m = min(len(fa), len(fb))
+    fa, fb = fa[:m] - fa[:m].mean(), fb[:m] - fb[:m].mean()
+    fps = SR / FINE_HOP
+    max_lag = int(0.05 * fps)
+    c = correlate(fa, fb, mode="full", method="fft")
+    mid = m - 1
     window = c[mid - max_lag : mid + max_lag + 1]
-    return float((np.argmax(window) - max_lag) / SR * 1000)
+    return float(-(np.argmax(window) - max_lag) / fps * 1000)
 
 
 def order_crate(tracks: list[TrackInput]) -> list[TrackInput]:
@@ -137,10 +143,10 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         audio = time_stretch(load_stereo(t.path), ratio)
         audio *= target_rms / _rms_loud(audio)
         expected = t.analysis.first_downbeat / ratio
-        first, per = _fit_downbeats(audio.mean(axis=1), SR, expected, period)
-        # The re-fit is for sub-millisecond alignment only. It may report a later bar as
-        # "first" (e.g. if the stretch softens the very first kick), so keep the original
-        # bar numbering and shift by whole bars back onto the analysed downbeat.
+        # Re-align the phase on the stretched audio (tempo is now exactly `period`): this
+        # absorbs any time offset the stretcher introduces. It may report a later bar as
+        # "first" if the stretch softens the very first kick, so keep the analysed bar numbering.
+        first, per = _fit_downbeats(audio.mean(axis=1), SR, expected, period, window=0.02)
         first -= round((first - expected) / (4 * per)) * 4 * per
         nbars = int((len(audio) / SR - first) // (4 * per))
         prepared.append((t, ratio, audio, first, nbars))
@@ -219,21 +225,25 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         a_start, a_audio, a_first, a_out, _ = placements[i]
         b_start, b_audio, b_first, _, _ = placements[i + 1]
         t_start = a_start + a_first + a_out * bar
-        # Measure how well the two kicks line up over the first half of the overlap.
-        n = int(n_trans // 2 * bar * SR)
-        ia = int(round((t_start - a_start) * SR))
-        ib = int(round((t_start - b_start) * SR))
-        if ib < 0:  # incoming downbeat at (or a hair before) sample 0: skip the first few samples of both
-            ia, ib = ia - ib, 0
-        offset = None
-        if ia + n <= len(a_audio) and ib + n <= len(b_audio) and ib >= 0:
-            offset = round(_measure_offset_ms(a_audio[ia : ia + n], b_audio[ib : ib + n]), 2)
+        # Measure beat alignment over the whole overlap in 4-bar chunks; report the median,
+        # so one irregular passage (e.g. an off-grid intro effect) does not dominate.
+        ia0 = int(round((t_start - a_start) * SR))
+        ib0 = int(round((t_start - b_start) * SR))
+        if ib0 < 0:  # incoming downbeat at (or a hair before) sample 0: skip the first few samples of both
+            ia0, ib0 = ia0 - ib0, 0
+        chunk = int(4 * bar * SR)
+        chunks = []
+        for c in range(n_trans // 4):
+            ia, ib = ia0 + c * chunk, ib0 + c * chunk
+            if ia + chunk <= len(a_audio) and ib + chunk <= len(b_audio):
+                chunks.append(round(_measure_offset_ms(a_audio[ia : ia + chunk], b_audio[ib : ib + chunk]), 2))
+        offset = round(float(np.median(chunks)), 2) if chunks else None
         ka = placed[i].camelot
         kb = placed[i + 1].camelot
         transitions.append(Transition(
             from_title=placed[i].title, to_title=placed[i + 1].title, start=t_start,
             bass_swap=t_start + n_trans // 2 * bar, end=t_start + n_trans * bar, bars=n_trans,
-            key_relation=compatibility(ka, kb), measured_offset_ms=offset,
+            key_relation=compatibility(ka, kb), measured_offset_ms=offset, chunk_offsets_ms=chunks,
         ))
 
     # 4) Master: soft-limit and normalise to -1 dBFS peak.

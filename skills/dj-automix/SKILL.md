@@ -66,7 +66,7 @@ Read the printed tracklist (also written to `mix.tracklist.txt`) and tell the us
 
 - where `mix.mp3`, `mix.wav`, `mix.cue` and `mix.json` are;
 - the tracklist with timestamps, each track's tempo change in %, and the key relation of every transition (`adjacent`, `relative`, `clash`, …);
-- the **measured kick alignment** per transition. Within about ±5 ms is tight. Larger values mean the beat grid of that track is unreliable, so suggest checking it;
+- the **measured beat alignment** per transition (median over 4-bar parts). Within about ±5 ms is tight. Larger values mean the beat grid of that track is unreliable, so suggest checking it. If the tracklist names an "irregular passage", only part of the blend is off (often an intro effect that is not on the beat): mention it so the user listens to that spot;
 - every warning (for example a tempo change above 8 %, or a track too short for the transition);
 - the license note.
 

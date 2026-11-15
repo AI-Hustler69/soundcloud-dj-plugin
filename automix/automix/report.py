@@ -29,7 +29,12 @@ def tracklist(result: MixResult) -> str:
         lines.append(f"{i:>2}. {ts(t.first_downbeat)}  {t.title}  [{t.camelot or '?'}; {t.bpm_original} BPM, {t.stretch_pct:+.1f} %]{lic}")
     lines.append("")
     for tr in result.transitions:
-        off = f", kick alignment {tr.measured_offset_ms:+.1f} ms" if tr.measured_offset_ms is not None else ""
+        off = ""
+        if tr.measured_offset_ms is not None:
+            off = f", beat alignment {tr.measured_offset_ms:+.1f} ms"
+            spread = [c for c in tr.chunk_offsets_ms if abs(c - tr.measured_offset_ms) > 5]
+            if spread:
+                off += f" (irregular passage: {', '.join(f'{c:+.0f}' for c in spread)} ms in some 4-bar parts)"
         lines.append(f"   {ts(tr.start)}–{ts(tr.end)}  {tr.from_title} → {tr.to_title}: {tr.bars}-bar blend, bass swap at {ts(tr.bass_swap)}, key {tr.key_relation}{off}")
     if result.warnings:
         lines += ["", "Warnings:"] + [f" - {w}" for w in result.warnings]
