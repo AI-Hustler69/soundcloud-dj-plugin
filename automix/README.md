@@ -10,7 +10,7 @@ automix **never downloads anything** and never touches streams. It works only on
 2. **Beat-matches**: time-stretches every track to one tempo (the median of the crate, or `--bpm`) with [Rubber Band](https://breakfastquay.com/rubberband/) through ffmpeg, preserving pitch, then re-measures the grid on the stretched audio.
 3. **Plans** transitions on phrase boundaries (every 8 bars): the incoming track's first downbeat lands on the outgoing track's mix-out downbeat, with 16 bars of overlap by default.
 4. **Blends** like a DJ with a bass swap: the incoming highs rise over the first half, the bass lines swap at the midpoint (never two bass lines at once), and the outgoing highs fade over the second half.
-5. **Exports** `mix.mp3` / `mix.wav`, a tracklist with timestamps, a `.cue` sheet and a JSON report. The report includes the measured kick alignment of every transition, BPM and stretch per track, key relations and licenses.
+5. **Exports** `mix.mp3` / `mix.wav`, a tracklist with timestamps, a `.cue` sheet and a JSON report. The report includes the measured beat alignment of every transition (median over 4-bar parts), BPM and stretch per track, key relations and licenses.
 
 ## Install
 

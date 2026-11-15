@@ -25,6 +25,7 @@ class SynthSpec:
     bars: int = 48
     lead_in: float = 0.0  # seconds of silence before the first downbeat
     seed: int = 0
+    jumpup: bool = False  # loud, distorted, syncopated bass stabs that crowd the kick's band
 
 
 def _env(n: int, decay: float) -> np.ndarray:
@@ -86,6 +87,19 @@ def synth_track(spec: SynthSpec) -> np.ndarray:
     bass = np.sin(2 * np.pi * root * t) * 0.22 + np.sin(2 * np.pi * (root / 2) * t) * 0.18
     pad = (np.sin(2 * np.pi * root * 2 * t) + np.sin(2 * np.pi * third * 2 * t) + np.sin(2 * np.pi * fifth * 2 * t)) / 3 * 0.12
     out += (bass + pad) * gate
+
+    if spec.jumpup:
+        # Jump-up style: heavily saturated reese stabs on off-beat 16ths, louder than
+        # the kick in the low band (including just before each downbeat).
+        stab_n = int(step * 1.6 * SR)
+        st = np.arange(stab_n) / SR
+        f0 = root / 2
+        saw = sum(np.sin(2 * np.pi * f0 * h * (1 + 0.004 * (h % 2)) * st) / h for h in range(1, 12))
+        stab = np.tanh(5.0 * saw * _env(stab_n, step * 1.2)) * 0.9
+        for b in range(8, spec.bars - 8):
+            t0 = spec.lead_in + b * bar
+            for s_ in (3, 6, 9, 11, 14, 15):
+                _place(out, stab, t0 + s_ * step, 1.0)
 
     out /= np.max(np.abs(out)) / 0.89
     return out.astype(np.float32)
