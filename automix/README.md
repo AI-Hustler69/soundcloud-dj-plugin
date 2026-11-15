@@ -63,6 +63,39 @@ To inspect tracks without mixing:
 .venv/bin/python -m automix analyze a.mp3 b.mp3
 ```
 
+## Samples (loops and one-shots)
+
+Put samples on top of the mix (horns, vocal shots, impacts, percussion loops, risers) by giving the crate an object form with a `samples` list:
+
+```json
+{
+  "tracks": [
+    {"path": "tracks/one.mp3", "title": "Artist A - One", "camelot": "12A"},
+    {"path": "tracks/two.mp3", "title": "Artist B - Two"}
+  ],
+  "samples": [
+    {"path": "samples/horn.wav", "at": {"transition": 1}, "gain_db": -4},
+    {"path": "samples/perc_172.wav", "at": {"transition": 1, "bar": -8}, "bars": 8, "gain_db": -8},
+    {"path": "samples/riser.wav", "at": {"track": 2, "bar": 32}, "align": "end"},
+    {"path": "samples/vocal.wav", "at": {"time": "05:12"}}
+  ]
+}
+```
+
+**Where it lands (`at`):**
+- `{"transition": N, "bar": B}`: the N-th transition's incoming downbeat, plus B bars. B may be negative.
+- `{"track": N or "title", "bar": B}`: bar B of a track. N is 1-based in the final play order, so with `--auto-order` refer to tracks by title.
+- `{"time": "mm:ss"}`: a mix time, snapped to the nearest downbeat (`"snap": false` keeps it exact).
+- `"align": "end"` makes the sample *finish* at the anchor, which suits risers into a drop.
+
+**Loop or one-shot:** this is detected automatically. Force it with `"kind": "loop"` or `"kind": "oneshot"`.
+- **Loops:** a file whose length is within 6 % of 1/2/4/8/16 bars at the mix tempo (half- or double-time loops included). It is time-stretched to the mix tempo and repeated for `bars` bars (default: one pass). `loop_bars` overrides the detected loop length. Loops should start exactly on their first downbeat, as most sample-pack loops do.
+- **One-shots:** everything else, played at the original tempo. The sound's attack (not the start of the file) lands on the beat, so a little silence before the hit is fine.
+
+**Level:** `gain_db` sets it (default −3 dB). Samples are summed before the master limiter.
+
+The tracklist lists every sample with its time, type, tempo change and anchor. The same licensing rules apply to samples: use only packs whose license allows them in a published mix.
+
 ## Tests
 
 ```bash
@@ -80,6 +113,7 @@ The tests use synthetic tracks with known tempo, downbeat and key (no third-part
 
 - **Constant tempo, 4/4, a kick on the downbeat** are assumed (true for most DnB, house and techno). Tracks with tempo changes, half-time intros or no kick on "1" can get a wrong grid.
 - **Key detection is an estimate.** Major/minor and relative-key mix-ups happen, as with every audio-only key detector, so pass `camelot` from metadata when you have it.
+- **Samples are placed where you say.** It does not choose sample positions itself, and does not duck or EQ the tracks under a sample.
 - **Mix points are chosen by structure, not taste.** It blends from the last 8-bar phrase that leaves room for the transition. It does not judge energy, vocals or the "right moment" like a DJ.
 - **Tempo:** every track is stretched to one tempo, and stretches beyond ±8 % are flagged.
 - **No listening test was possible here.** Alignment and the bass swap are verified by measurement. Listen before you publish.

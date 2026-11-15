@@ -40,6 +40,12 @@ def tracklist(result: MixResult) -> str:
             if spread:
                 off += f" (irregular passage: {', '.join(f'{c:+.0f}' for c in spread)} ms in some 4-bar parts)"
         lines.append(f"   {ts(tr.start)}–{ts(tr.end)}  {tr.from_title} → {tr.to_title}: {tr.bars}-bar blend, bass swap at {ts(tr.bass_swap)}, key {tr.key_relation}{off}")
+    if result.samples:
+        lines += ["", "Samples:"]
+        for s in result.samples:
+            what = f"{s.loop_bars}-bar loop" + (f", {s.stretch_pct:+.1f} %" if s.stretch_pct else "") if s.kind == "loop" else "one-shot"
+            extra = f" ({'; '.join(s.notes)})" if s.notes else ""
+            lines.append(f"   {ts(s.start)}–{ts(s.end)}  {s.title}: {what}, {s.gain_db:+.0f} dB, at {s.anchor}{extra}")
     if result.warnings:
         lines += ["", "Warnings:"] + [f" - {w}" for w in result.warnings]
     lines += ["", LICENSE_NOTE]
@@ -77,6 +83,7 @@ def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> 
         "bpm": result.bpm, "duration": round(result.duration, 2),
         "tracks": [asdict(t) for t in result.tracks],
         "transitions": [asdict(t) for t in result.transitions],
+        "samples": [asdict(s) for s in result.samples],
         "warnings": result.warnings, "license_note": LICENSE_NOTE,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     files["json"] = str(js)

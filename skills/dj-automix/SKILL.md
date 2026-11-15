@@ -1,6 +1,6 @@
 ---
 name: dj-automix
-description: Mix local audio files into one continuous, beat-matched DJ mix (time-stretch to one tempo, phrase-aligned transitions with a bass swap, tracklist and cue sheet). Use when the user wants to auto-mix, beat-match or blend tracks they already have as files, or turn a crate built with dj-crate into an actual mix. Works only on files the user provides; never downloads anything.
+description: Mix local audio files into one continuous, beat-matched DJ mix (time-stretch to one tempo, phrase-aligned transitions with a bass swap, optional samples such as loops, horns, vocals and risers placed on the grid, tracklist and cue sheet). Use when the user wants to auto-mix, beat-match or blend tracks they already have as files, or turn a crate built with dj-crate into an actual mix. Works only on files the user provides; never downloads anything.
 ---
 
 # DJ automix (prototype)
@@ -41,6 +41,27 @@ Write a crate JSON with the tracks **in play order**. When the tracks came from 
 
 Without metadata, list just `path` and `title`, or use `--files` (step 3) and the tool estimates the keys.
 
+### Samples (optional)
+
+If the user has samples (loops, horns, vocal shots, impacts, risers), use the object form of the crate: `{"tracks": [...], "samples": [...]}`. Each sample has a `path` and an anchor `at`:
+
+- `{"transition": 1}`, or `{"transition": 1, "bar": -8}` to start 8 bars before it;
+- `{"track": "Title" or 2, "bar": 32}`. Use titles when `--auto-order` may reorder the tracks;
+- `{"time": "05:12"}`, snapped to the nearest downbeat.
+
+Further fields:
+- `"align": "end"` lets a riser finish on the anchor;
+- `"bars": 8` makes a loop repeat for 8 bars;
+- `"gain_db": -6` sets the level (default −3);
+- `"kind": "loop"` or `"oneshot"` overrides auto-detection.
+
+Loops are stretched to the mix tempo; one-shots keep their tempo, and their attack lands on the beat.
+
+If the user does not say where samples should go, propose positions that DJs typically use and say what you chose:
+- a horn or impact on a transition's incoming downbeat or on a drop;
+- a percussion loop over the 8 bars before a transition;
+- a riser ending on a drop.
+
 ## 3. Mix
 
 Run it from the tool's folder so the `automix` package is importable:
@@ -68,7 +89,8 @@ Read the printed tracklist (also written to `mix.tracklist.txt`) and tell the us
 - the tracklist with timestamps, each track's tempo change in %, and the key relation of every transition (`adjacent`, `relative`, `clash`, …);
 - the **measured beat alignment** per transition (median over 4-bar parts). Within about ±5 ms is tight. Larger values mean the beat grid of that track is unreliable, so suggest checking it. If the tracklist names an "irregular passage", only part of the blend is off (often an intro effect that is not on the beat): mention it so the user listens to that spot;
 - every warning (for example a tempo change above 8 %, or a track too short for the transition);
-- the license note.
+- every sample with its time, type (loop or one-shot), tempo change and anchor;
+- the license note. It covers samples too: sample packs have their own licenses.
 
 ## Limits to mention when relevant
 

@@ -9,7 +9,7 @@ A **Claude Code plugin** and **MCP (Model Context Protocol) server** for the off
 - Check a **SoundCloud playlist or label set** to see which tracks can be downloaded.
 - Flag "free download" links that go through **download gates** (Hypeddit, ToneDen). They are reported, never bypassed.
 - A **DJ set builder skill** (`dj-crate`) that orders tracks by tempo and **harmonic mixing** rules (Camelot wheel) and suggests transitions.
-- An **automix skill** (`dj-automix`, prototype) that beat-matches the tracks you downloaded into one continuous mix with phrase-aligned, bass-swap transitions, plus a tracklist and cue sheet.
+- An **automix skill** (`dj-automix`, prototype) that beat-matches the tracks you downloaded into one continuous mix with phrase-aligned, bass-swap transitions, optionally layers **samples** (loops synced to the tempo, horns, vocal shots, risers) on the beat grid, and writes a tracklist and cue sheet.
 - Works in **Claude Code**, **Claude Desktop**, **OpenAI Codex** and any other MCP client. A limited mode works without API keys.
 
 **Quick install** (Claude Code):
@@ -242,6 +242,8 @@ The `dj-automix` skill sets up the tool on first use and then:
 4. writes `mix.mp3`, `mix.wav`, a tracklist, a `.cue` file and a JSON report with the measured beat alignment of every transition.
 
 It needs Python 3.11+ and ffmpeg built with `rubberband`. You can also run it by hand or try a demo without any music; see [`automix/README.md`](automix/README.md).
+
+You can also add **samples** (loops, horns, vocal shots, risers): tell Claude where they should go, for example "a horn on every transition, and my perc loop for 8 bars before the second one". Loops are synced to the mix tempo, and one-shots land on the beat. The crate format is described in [`automix/README.md`](automix/README.md#samples-loops-and-one-shots).
 
 It is a prototype:
 - it assumes constant-tempo 4/4 music with a kick on the downbeat (drum & bass, house, techno);

@@ -58,6 +58,7 @@ class MixResult:
     tracks: list[PlacedTrack] = field(default_factory=list)
     transitions: list[Transition] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    samples: list = field(default_factory=list)  # PlacedSample
 
     @property
     def duration(self) -> float:
@@ -143,7 +144,7 @@ def order_crate(tracks: list[TrackInput]) -> list[TrackInput]:
 
 
 def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_bars: int = 16, phrase_bars: int = 8,
-               target_rms: float = 0.18) -> MixResult:
+               target_rms: float = 0.18, samples: list | None = None) -> MixResult:
     if not tracks:
         raise ValueError("no tracks")
     if transition_bars < 2 or transition_bars % 2:
@@ -273,9 +274,19 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
             beatless_chunks=beatless,
         ))
 
-    # 4) Master: soft-limit and normalise to -1 dBFS peak.
+    # 4) Samples (loops / one-shots) on top of the blended tracks, before mastering.
+    placed_samples = []
+    if samples:
+        from .samples import render_samples
+
+        mix, placed_samples = render_samples(mix, samples, target, placed, transitions)
+        for ps in placed_samples:
+            warnings.extend(f"sample {ps.title}: {n}" for n in ps.notes if "unnatural" in n or "cut" in n)
+
+    # 5) Master: soft-limit and normalise to -1 dBFS peak.
     peak = np.max(np.abs(mix)) or 1.0
     if peak > 0.9:
         mix = np.tanh(mix / peak * 1.5) / np.tanh(1.5)
     mix *= 10 ** (-1 / 20) / (np.max(np.abs(mix)) or 1.0)
-    return MixResult(audio=mix.astype(np.float32), bpm=round(target, 2), tracks=placed, transitions=transitions, warnings=warnings)
+    return MixResult(audio=mix.astype(np.float32), bpm=round(target, 2), tracks=placed, transitions=transitions,
+                     warnings=warnings, samples=placed_samples)
