@@ -14,20 +14,26 @@ from .mixer import TrackInput, order_crate, render_mix
 from .report import tracklist, write_outputs
 
 
-def _load_crate(path: str) -> list[dict]:
-    """Crate JSON: [{"path": "...", "title": "...", "camelot": "8A", "license": "cc-by"}, ...]
+def _load_crate(path: str) -> tuple[list[dict], list[dict]]:
+    """Crate JSON, either a list of tracks or {"tracks": [...], "samples": [...]}.
 
-    "camelot" and "license" are optional (e.g. copied from the soundcloud-dj plugin's get_track output).
+    Track: {"path": "...", "title": "...", "camelot": "8A", "license": "cc-by"} ("camelot"/"license" optional).
+    Sample: {"path": "...", "title": "...", "at": {"transition": 1, "bar": -4}, "gain_db": -3,
+             "kind": "auto|loop|oneshot", "bars": 8, "loop_bars": 2, "align": "start|end", "snap": true}
     Relative paths are resolved against the crate file's folder.
     """
     base = Path(path).parent
-    items = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(items, list) or not items:
-        raise SystemExit("crate JSON must be a non-empty list")
-    for it in items:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    tracks, samples = (data, []) if isinstance(data, list) else (data.get("tracks", []), data.get("samples", []))
+    if not isinstance(tracks, list) or not tracks:
+        raise SystemExit("crate JSON needs a non-empty list of tracks")
+    for it in tracks + samples:
         p = Path(it["path"])
         it["path"] = str(p if p.is_absolute() else base / p)
-    return items
+    for s in samples:
+        if "at" not in s:
+            raise SystemExit(f"sample {s.get('title') or s['path']} needs an 'at' anchor")
+    return tracks, samples
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -63,10 +69,11 @@ def main(argv: list[str] | None = None) -> int:
         from .demo import build_demo
 
         items = build_demo(Path(args.out).parent)
+        sample_items: list[dict] = []
         bpm_range = (160.0, 190.0)
         out, bars, bpm, auto, mp3 = args.out, 16, None, False, True
     else:
-        items = _load_crate(args.crate) if args.crate else [{"path": f, "title": Path(f).stem} for f in args.files]
+        items, sample_items = _load_crate(args.crate) if args.crate else ([{"path": f, "title": Path(f).stem} for f in args.files], [])
         bpm_range = tuple(args.bpm_range)
         out, bars, bpm, auto, mp3 = args.out, args.bars, args.bpm, args.auto_order, not args.no_mp3
 
@@ -79,7 +86,13 @@ def main(argv: list[str] | None = None) -> int:
     if auto:
         tracks = order_crate(tracks)
     print("rendering mix …", file=sys.stderr)
-    result = render_mix(tracks, bpm=bpm, transition_bars=bars)
+    from .samples import SampleInput
+
+    samples = [SampleInput(path=s["path"], title=s.get("title") or Path(s["path"]).stem, at=s["at"],
+                           gain_db=float(s.get("gain_db", -3.0)), kind=s.get("kind", "auto"), bars=s.get("bars"),
+                           loop_bars=s.get("loop_bars"), align=s.get("align", "start"), snap=bool(s.get("snap", True)))
+               for s in sample_items]
+    result = render_mix(tracks, bpm=bpm, transition_bars=bars, samples=samples)
     files = write_outputs(result, out, mp3=mp3)
     print(tracklist(result))
     print(json.dumps(files, indent=2))

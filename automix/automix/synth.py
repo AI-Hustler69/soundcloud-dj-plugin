@@ -103,3 +103,28 @@ def synth_track(spec: SynthSpec) -> np.ndarray:
 
     out /= np.max(np.abs(out)) / 0.89
     return out.astype(np.float32)
+
+
+def synth_oneshot(length: float = 0.8, lead_in: float = 0.05, seed: int = 0) -> np.ndarray:
+    """A horn-like one-shot (saw stab with a sharp attack) after ``lead_in`` seconds of silence."""
+    rng = np.random.default_rng(seed)
+    n = int((lead_in + length) * SR)
+    out = np.zeros(n)
+    m = int(length * SR)
+    t = np.arange(m) / SR
+    tone = sum(np.sin(2 * np.pi * 440 * h * t) / h for h in range(1, 8))
+    body = np.tanh(2 * tone) * np.exp(-t / (length / 3)) + 0.05 * rng.standard_normal(m) * np.exp(-t / 0.01)
+    out[int(lead_in * SR) : int(lead_in * SR) + m] = body
+    return (out / np.max(np.abs(out)) * 0.8).astype(np.float32)
+
+
+def synth_loop(bpm: float, bars: int = 2) -> np.ndarray:
+    """A drum loop starting exactly on its first downbeat: a short click on every beat (accented on "1")."""
+    beat = 60.0 / bpm
+    n = int(round(bars * 4 * beat * SR))
+    out = np.zeros(n)
+    cn = int(0.01 * SR)
+    click = np.sin(2 * np.pi * 2000 * np.arange(cn) / SR) * _env(cn, 0.002)
+    for k in range(bars * 4):
+        _place(out, click, k * beat, 1.0 if k % 4 == 0 else 0.6)
+    return out.astype(np.float32)
