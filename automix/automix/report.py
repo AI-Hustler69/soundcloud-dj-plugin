@@ -30,8 +30,12 @@ def tracklist(result: MixResult) -> str:
     lines.append("")
     for tr in result.transitions:
         off = ""
+        if tr.measured_offset_ms is None and tr.beatless_chunks:
+            off = ", beat alignment not measurable (no clear beat in the blend, e.g. a beatless intro)"
+        if tr.measured_offset_ms is not None and tr.beatless_chunks:
+            off = f", {tr.beatless_chunks * 4} bars without a clear beat skipped"
         if tr.measured_offset_ms is not None:
-            off = f", beat alignment {tr.measured_offset_ms:+.1f} ms"
+            off = f", beat alignment {tr.measured_offset_ms:+.1f} ms" + off
             spread = [c for c in tr.chunk_offsets_ms if abs(c - tr.measured_offset_ms) > 5]
             if spread:
                 off += f" (irregular passage: {', '.join(f'{c:+.0f}' for c in spread)} ms in some 4-bar parts)"

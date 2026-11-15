@@ -48,6 +48,7 @@ class Transition:
     key_relation: str
     measured_offset_ms: float | None = None  # median over 4-bar chunks of the overlap
     chunk_offsets_ms: list[float] = field(default_factory=list)
+    beatless_chunks: int = 0  # 4-bar parts skipped because one side had no clear beat
 
 
 @dataclass
@@ -89,6 +90,24 @@ def _ramp(n: int, a: int, b: int, rising: bool) -> np.ndarray:
     idx = np.arange(n)
     x = (idx - a) / max(1, b - a)
     return _eq_power(x, rising)
+
+
+BEAT_STRENGTH_MIN = 2.0  # on-beat transient energy vs. average, below this a passage counts as beatless
+
+
+def _beat_strength(audio: np.ndarray, period: float) -> float:
+    """How strongly transients sit on a beat grid of ``period`` (best phase), relative to average."""
+    from .analysis import FINE_HOP, transient_envelope
+
+    fl = transient_envelope(audio.mean(axis=1), SR)
+    fps = SR / FINE_HOP
+    n_beats = int((len(fl) / fps) // period) - 1
+    if n_beats < 4 or fl.mean() <= 0:
+        return 0.0
+    beats = np.arange(n_beats) * period
+    offs = np.arange(0, period, 0.002)
+    pos = np.clip(((beats[None, :] + offs[:, None]) * fps).astype(int), 0, len(fl) - 1)
+    return float(fl[pos].mean(axis=1).max() / fl.mean())
 
 
 def _measure_offset_ms(a: np.ndarray, b: np.ndarray) -> float:
@@ -233,10 +252,17 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
             ia0, ib0 = ia0 - ib0, 0
         chunk = int(4 * bar * SR)
         chunks = []
+        beatless = 0
         for c in range(n_trans // 4):
             ia, ib = ia0 + c * chunk, ib0 + c * chunk
             if ia + chunk <= len(a_audio) and ib + chunk <= len(b_audio):
-                chunks.append(round(_measure_offset_ms(a_audio[ia : ia + chunk], b_audio[ib : ib + chunk]), 2))
+                sa, sb = a_audio[ia : ia + chunk], b_audio[ib : ib + chunk]
+                # Skip parts where either track has no clear beat (beatless intro, breakdown):
+                # there is nothing to clash, and the measurement would only be noise.
+                if _beat_strength(sa, period) < BEAT_STRENGTH_MIN or _beat_strength(sb, period) < BEAT_STRENGTH_MIN:
+                    beatless += 1
+                    continue
+                chunks.append(round(_measure_offset_ms(sa, sb), 2))
         offset = round(float(np.median(chunks)), 2) if chunks else None
         ka = placed[i].camelot
         kb = placed[i + 1].camelot
@@ -244,6 +270,7 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
             from_title=placed[i].title, to_title=placed[i + 1].title, start=t_start,
             bass_swap=t_start + n_trans // 2 * bar, end=t_start + n_trans * bar, bars=n_trans,
             key_relation=compatibility(ka, kb), measured_offset_ms=offset, chunk_offsets_ms=chunks,
+            beatless_chunks=beatless,
         ))
 
     # 4) Master: soft-limit and normalise to -1 dBFS peak.
