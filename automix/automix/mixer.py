@@ -143,6 +143,28 @@ def order_crate(tracks: list[TrackInput]) -> list[TrackInput]:
     return out
 
 
+
+TRUE_PEAK_CEILING_DB = -1.5  # dBTP; leaves room for the MP3 encoder's overshoot
+
+
+def true_peak(audio: np.ndarray, oversample: int = 4, chunk: int = 1 << 20) -> float:
+    """Inter-sample peak (linear) estimated by 4x polyphase oversampling, as in ITU-R BS.1770.
+
+    Works in overlapping chunks so a long mix does not need a 4x copy in memory.
+    """
+    from scipy.signal import resample_poly
+
+    x = audio if audio.ndim == 2 else audio[:, None]
+    pad = 64  # covers the resampling filter's support
+    best = 0.0
+    for i in range(0, len(x), chunk):
+        a, b = max(0, i - pad), min(len(x), i + chunk + pad)
+        up = resample_poly(x[a:b], oversample, 1, axis=0)
+        lo, hi = (i - a) * oversample, (min(len(x), i + chunk) - a) * oversample
+        best = max(best, float(np.max(np.abs(up[lo:hi]))) if hi > lo else 0.0)
+    return max(best, float(np.max(np.abs(x))) if len(x) else 0.0)
+
+
 def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_bars: int = 16, phrase_bars: int = 8,
                target_rms: float = 0.18, samples: list | None = None) -> MixResult:
     if not tracks:
@@ -283,10 +305,11 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         for ps in placed_samples:
             warnings.extend(f"sample {ps.title}: {n}" for n in ps.notes if "unnatural" in n or "cut" in n)
 
-    # 5) Master: soft-limit and normalise to -1 dBFS peak.
+    # 5) Master: soft-limit, then set the level by the *true* (inter-sample) peak, so the WAV and the
+    # MP3 made from it do not clip on playback (sample-peak normalisation alone left +0.6 dBTP).
     peak = np.max(np.abs(mix)) or 1.0
     if peak > 0.9:
         mix = np.tanh(mix / peak * 1.5) / np.tanh(1.5)
-    mix *= 10 ** (-1 / 20) / (np.max(np.abs(mix)) or 1.0)
+    mix *= 10 ** (TRUE_PEAK_CEILING_DB / 20) / (true_peak(mix) or 1.0)
     return MixResult(audio=mix.astype(np.float32), bpm=round(target, 2), tracks=placed, transitions=transitions,
                      warnings=warnings, samples=placed_samples)

@@ -142,8 +142,10 @@ def test_key_relations_use_metadata(mix):
 
 
 def test_master_is_not_clipping_and_has_expected_length(mix):
+    from automix.mixer import TRUE_PEAK_CEILING_DB
     peak = float(np.max(np.abs(mix.audio)))
-    assert 0.85 < peak <= 10 ** (-1 / 20) + 1e-4
+    # Levelled by true peak, so the sample peak sits at or a little under the ceiling.
+    assert 0.6 < peak <= 10 ** (TRUE_PEAK_CEILING_DB / 20) + 1e-4
     # 3 tracks of 48 bars, two 16-bar overlaps -> about 48*3 - 32 = 112 bars plus tails.
     assert 112 * 4 * 60 / 174.0 < mix.duration < 125 * 4 * 60 / 174.0
 
@@ -203,3 +205,21 @@ def test_timestamp_format():
     assert ts(0) == "00:00"
     assert ts(75.4) == "01:15"
     assert ts(3725) == "1:02:05"
+
+
+def test_true_peak_catches_inter_sample_overs():
+    from automix.mixer import true_peak
+    # A sine at fs/4 sampled at 45 degrees: every sample is 0.707, the waveform peaks at 1.0 between them.
+    n = np.arange(4096)
+    x = np.sin(2 * np.pi * n / 4 + np.pi / 4)
+    stereo = np.stack([x, x], axis=1) * 0.9
+    assert np.max(np.abs(stereo)) == pytest.approx(0.9 * 0.7071, abs=1e-3)
+    assert true_peak(stereo) == pytest.approx(0.9, abs=0.02)
+    # chunked and unchunked agree
+    assert true_peak(stereo, chunk=1000) == pytest.approx(true_peak(stereo), abs=1e-6)
+
+
+def test_master_stays_under_true_peak_ceiling(mix):
+    from automix.mixer import TRUE_PEAK_CEILING_DB, true_peak
+    tp_db = 20 * np.log10(true_peak(mix.audio))
+    assert TRUE_PEAK_CEILING_DB - 0.1 <= tp_db <= TRUE_PEAK_CEILING_DB + 0.05
