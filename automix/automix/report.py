@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 
 from .mixer import MixResult
@@ -33,7 +34,7 @@ def tracklist(result: MixResult) -> str:
         if tr.measured_offset_ms is None and tr.beatless_chunks:
             off = ", beat alignment not measurable (no clear beat in the blend, e.g. a beatless intro)"
         if tr.measured_offset_ms is not None and tr.beatless_chunks:
-            off = f", {tr.beatless_chunks * 4} bars without a clear beat skipped"
+            off = f", {tr.beatless_chunks * tr.chunk_bars} bars without a clear beat skipped"
         if tr.measured_offset_ms is not None:
             off = f", beat alignment {tr.measured_offset_ms:+.1f} ms" + off
             spread = [c for c in tr.chunk_offsets_ms if abs(c - tr.measured_offset_ms) > 5]
@@ -46,6 +47,11 @@ def tracklist(result: MixResult) -> str:
             what = f"{s.loop_bars}-bar loop" + (f", {s.stretch_pct:+.1f} %" if s.stretch_pct else "") if s.kind == "loop" else "one-shot"
             extra = f" ({'; '.join(s.notes)})" if s.notes else ""
             lines.append(f"   {ts(s.start)}–{ts(s.end)}  {s.title}: {what}, {s.gain_db:+.0f} dB, at {s.anchor}{extra}")
+    m = result.master
+    if m is not None:
+        how = (f"limited to {m.target_lufs:g} LUFS (deepest gain reduction {m.max_reduction_db:.1f} dB)"
+               if m.target_lufs is not None else "no limiter")
+        lines += ["", f"Master: {m.lufs:.1f} LUFS, true peak {m.true_peak_db:.1f} dBTP, {how}."]
     if result.warnings:
         lines += ["", "Warnings:"] + [f" - {w}" for w in result.warnings]
     lines += ["", LICENSE_NOTE]
@@ -81,6 +87,8 @@ def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> 
     js = base.with_suffix(".json")
     js.write_text(json.dumps({
         "bpm": result.bpm, "duration": round(result.duration, 2),
+        "master": None if result.master is None else {
+            k: (float(v) if v is not None and np.isfinite(v) else None) for k, v in vars(result.master).items()},
         "tracks": [asdict(t) for t in result.tracks],
         "transitions": [asdict(t) for t in result.transitions],
         "samples": [asdict(s) for s in result.samples],
