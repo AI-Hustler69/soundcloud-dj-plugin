@@ -75,7 +75,11 @@ Options:
 - `--bpm 174` for a fixed tempo (the default is the crate's median);
 - `--bars 32` for longer blends (default 16; must be even);
 - `--auto-order` to sort by BPM and Camelot;
-- `--bpm-range 120 135` for house or techno (the default 160–190 suits drum & bass).
+- `--bpm-range 120 135` for house or techno (the default 160–190 suits drum & bass);
+- `--clash-bars 8` for a shorter blend where two keys clash (DJs cut quickly between clashing basslines). Use it whenever the order has a `clash` you cannot avoid;
+- `--lufs -9` sets the master loudness (the default -9 LUFS suits a club mix); `--no-limiter` only sets the true peak.
+
+The master is limited to that loudness under a -1.5 dBTP true-peak ceiling, and the MP3 is checked to stay under -1 dBTP after encoding.
 
 Write the output next to the user's files or in their project, not inside `${CLAUDE_PLUGIN_ROOT}`, which is replaced on update.
 
@@ -88,6 +92,7 @@ Read the printed tracklist (also written to `mix.tracklist.txt`) and tell the us
 - where `mix.mp3`, `mix.wav`, `mix.cue` and `mix.json` are;
 - the tracklist with timestamps, each track's tempo change in %, and the key relation of every transition (`adjacent`, `relative`, `clash`, …);
 - the **measured beat alignment** per transition (median over 4-bar parts). Within about ±5 ms is tight. Larger values mean the beat grid of that track is unreliable, so suggest checking it. If the tracklist names an "irregular passage", only part of the blend is off (often an intro effect that is not on the beat): mention it so the user listens to that spot;
+- the `Master:` line: loudness, true peak and the deepest limiter gain reduction. If a warning says the target was not reached, the tracks have sharp transients that more limiting would crush; say so;
 - every warning (for example a tempo change above 8 %, or a track too short for the transition);
 - every sample with its time, type (loop or one-shot), tempo change and anchor;
 - the license note. It covers samples too: sample packs have their own licenses.
@@ -95,5 +100,5 @@ Read the printed tracklist (also written to `mix.tracklist.txt`) and tell the us
 ## Limits to mention when relevant
 
 - The tool assumes constant tempo, 4/4 and a kick on the downbeat. Tracks with tempo changes, half-time intros or no kick on "1" can get a wrong grid.
-- Keys estimated from audio can confuse major/minor or relative keys, so prefer metadata keys.
+- Keys estimated from audio can confuse major/minor or relative keys, and can be wrong altogether, so prefer metadata keys. When a crate has no metadata keys and the order matters, say that the keys are estimates.
 - Mix points are chosen by phrase structure, not taste: it mixes out at the last 8-bar phrase that leaves room for the blend.

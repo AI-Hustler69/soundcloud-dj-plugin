@@ -4,7 +4,7 @@
  */
 
 export const SERVER_NAME = "soundcloud-dj-mcp";
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_VERSION = "0.4.0";
 export const USER_AGENT = `${SERVER_NAME}/${SERVER_VERSION}`;
 
 export type Mode = "api" | "oembed";

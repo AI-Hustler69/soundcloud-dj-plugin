@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 
 from .mixer import MixResult
@@ -33,7 +34,7 @@ def tracklist(result: MixResult) -> str:
         if tr.measured_offset_ms is None and tr.beatless_chunks:
             off = ", beat alignment not measurable (no clear beat in the blend, e.g. a beatless intro)"
         if tr.measured_offset_ms is not None and tr.beatless_chunks:
-            off = f", {tr.beatless_chunks * 4} bars without a clear beat skipped"
+            off = f", {tr.beatless_chunks * tr.chunk_bars} bars without a clear beat skipped"
         if tr.measured_offset_ms is not None:
             off = f", beat alignment {tr.measured_offset_ms:+.1f} ms" + off
             spread = [c for c in tr.chunk_offsets_ms if abs(c - tr.measured_offset_ms) > 5]
@@ -46,6 +47,11 @@ def tracklist(result: MixResult) -> str:
             what = f"{s.loop_bars}-bar loop" + (f", {s.stretch_pct:+.1f} %" if s.stretch_pct else "") if s.kind == "loop" else "one-shot"
             extra = f" ({'; '.join(s.notes)})" if s.notes else ""
             lines.append(f"   {ts(s.start)}–{ts(s.end)}  {s.title}: {what}, {s.gain_db:+.0f} dB, at {s.anchor}{extra}")
+    m = result.master
+    if m is not None:
+        how = (f"limited to {m.target_lufs:g} LUFS (deepest gain reduction {m.max_reduction_db:.1f} dB)"
+               if m.target_lufs is not None else "no limiter")
+        lines += ["", f"Master: {m.lufs:.1f} LUFS, true peak {m.true_peak_db:.1f} dBTP, {how}."]
     if result.warnings:
         lines += ["", "Warnings:"] + [f" - {w}" for w in result.warnings]
     lines += ["", LICENSE_NOTE]
@@ -62,6 +68,32 @@ def cue_sheet(result: MixResult, audio_name: str) -> str:
     return "\n".join(out) + "\n"
 
 
+MP3_CEILING_DB = -1.0  # the decoded MP3 must stay under this true peak
+
+
+def _mp3_true_peak(path: Path) -> float:
+    from .master import true_peak
+
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(SR), "-"],
+                         check=True, capture_output=True).stdout
+    x = np.frombuffer(raw, dtype=np.float32).reshape(-1, 2)
+    tp = true_peak(x)
+    return 20 * np.log10(tp) if tp > 0 else float("-inf")
+
+
+def _encode_mp3(wav: Path, mp3_path: Path) -> float:
+    """Encode at 320 kbps; the encoder can overshoot a limited master by 1-2 dB, so measure the decoded
+    file and, if needed, encode once more with that much less gain. Returns the MP3's true peak in dBTP."""
+    cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k"]
+    subprocess.run(cmd + [str(mp3_path)], check=True)
+    tp = _mp3_true_peak(mp3_path)
+    if tp > MP3_CEILING_DB:
+        trim = MP3_CEILING_DB - 0.2 - tp
+        subprocess.run(cmd[:-4] + ["-af", f"volume={trim:.2f}dB"] + cmd[-4:] + [str(mp3_path)], check=True)
+        tp = _mp3_true_peak(mp3_path)
+    return tp
+
+
 def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> dict[str, str]:
     base = Path(out_base)
     base.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +102,7 @@ def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> 
     files = {"wav": str(wav)}
     if mp3:
         mp3_path = base.with_suffix(".mp3")
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k", str(mp3_path)], check=True)
+        mp3_tp = _encode_mp3(wav, mp3_path)
         files["mp3"] = str(mp3_path)
     txt = base.with_suffix(".tracklist.txt")
     txt.write_text(tracklist(result), encoding="utf-8")
@@ -81,9 +113,12 @@ def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> 
     js = base.with_suffix(".json")
     js.write_text(json.dumps({
         "bpm": result.bpm, "duration": round(result.duration, 2),
+        "master": None if result.master is None else {
+            k: (float(v) if v is not None and np.isfinite(v) else None) for k, v in vars(result.master).items()},
         "tracks": [asdict(t) for t in result.tracks],
         "transitions": [asdict(t) for t in result.transitions],
         "samples": [asdict(s) for s in result.samples],
+        "mp3_true_peak_db": round(mp3_tp, 2) if mp3 and np.isfinite(mp3_tp) else None,
         "warnings": result.warnings, "license_note": LICENSE_NOTE,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     files["json"] = str(js)

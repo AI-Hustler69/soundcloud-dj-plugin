@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from .analysis import analyze
+from .master import DEFAULT_TARGET_LUFS
 from .mixer import TrackInput, order_crate, render_mix
 from .report import tracklist, write_outputs
 
@@ -52,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--bpm", type=float, help="target tempo (default: median of the tracks)")
     m.add_argument("--bars", type=int, default=16, help="transition length in bars (even, default 16)")
     m.add_argument("--auto-order", action="store_true", help="reorder by BPM and Camelot compatibility")
+    m.add_argument("--clash-bars", type=int, help="shorter blend (even) where keys clash, e.g. 8")
+    m.add_argument("--lufs", type=float, default=DEFAULT_TARGET_LUFS,
+                   help=f"master loudness target with a true-peak limiter (default {DEFAULT_TARGET_LUFS:g})")
+    m.add_argument("--no-limiter", action="store_true", help="no limiter: only set the true peak to -1.5 dBTP")
     m.add_argument("--bpm-range", nargs=2, type=float, default=(160, 190), metavar=("LO", "HI"))
     m.add_argument("--no-mp3", action="store_true")
 
@@ -92,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
                            gain_db=float(s.get("gain_db", -3.0)), kind=s.get("kind", "auto"), bars=s.get("bars"),
                            loop_bars=s.get("loop_bars"), align=s.get("align", "start"), snap=bool(s.get("snap", True)))
                for s in sample_items]
-    result = render_mix(tracks, bpm=bpm, transition_bars=bars, samples=samples)
+    clash = getattr(args, "clash_bars", None)
+    lufs = None if getattr(args, "no_limiter", False) else getattr(args, "lufs", DEFAULT_TARGET_LUFS)
+    result = render_mix(tracks, bpm=bpm, transition_bars=bars, samples=samples, clash_bars=clash, target_lufs=lufs)
     files = write_outputs(result, out, mp3=mp3)
     print(tracklist(result))
     print(json.dumps(files, indent=2))

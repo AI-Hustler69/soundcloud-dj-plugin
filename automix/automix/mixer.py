@@ -8,10 +8,12 @@ from scipy.signal import butter, correlate, sosfiltfilt
 
 from .analysis import TrackAnalysis, _fit_downbeats
 from .keys import compatibility
+from .master import DEFAULT_TARGET_LUFS, TRUE_PEAK_CEILING_DB, MasterReport, integrated_lufs, master, true_peak  # noqa: F401
 from .stretch import SR, load_stereo, time_stretch
 
 CROSSOVER_HZ = 180.0
 MAX_STRETCH = 0.08  # warn above +-8 %
+TRACK_LUFS = -14.0  # every track is levelled to this before blending (the master sets the final loudness)
 
 
 @dataclass
@@ -48,7 +50,8 @@ class Transition:
     key_relation: str
     measured_offset_ms: float | None = None  # median over 4-bar chunks of the overlap
     chunk_offsets_ms: list[float] = field(default_factory=list)
-    beatless_chunks: int = 0  # 4-bar parts skipped because one side had no clear beat
+    beatless_chunks: int = 0  # parts (chunk_bars long) skipped because one side had no clear beat
+    chunk_bars: int = 4  # length of the parts the alignment is measured in
 
 
 @dataclass
@@ -59,6 +62,7 @@ class MixResult:
     transitions: list[Transition] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     samples: list = field(default_factory=list)  # PlacedSample
+    master: MasterReport | None = None
 
     @property
     def duration(self) -> float:
@@ -143,12 +147,24 @@ def order_crate(tracks: list[TrackInput]) -> list[TrackInput]:
     return out
 
 
+
+
 def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_bars: int = 16, phrase_bars: int = 8,
-               target_rms: float = 0.18, samples: list | None = None) -> MixResult:
+               target_rms: float = 0.18, samples: list | None = None, clash_bars: int | None = None,
+               target_lufs: float | None = DEFAULT_TARGET_LUFS) -> MixResult:
+    """Beat-matched mix of ``tracks`` in the given order.
+
+    clash_bars: a shorter blend (even, >= 2) for transitions whose keys clash, so two clashing
+        basslines overlap less (DJs cut quickly between clashing keys). None = same as transition_bars.
+    target_lufs: integrated loudness of the master, reached with a true-peak limiter; None = no
+        limiting, only scale the true peak to the ceiling.
+    """
     if not tracks:
         raise ValueError("no tracks")
     if transition_bars < 2 or transition_bars % 2:
         raise ValueError("transition_bars must be an even number >= 2")
+    if clash_bars is not None and (clash_bars < 2 or clash_bars % 2):
+        raise ValueError("clash_bars must be an even number >= 2")
     target = bpm or float(np.median([t.analysis.bpm for t in tracks]))
     period = 60.0 / target
     bar = 4 * period
@@ -161,7 +177,13 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         if abs(ratio - 1) > MAX_STRETCH:
             warnings.append(f"{t.title}: tempo changed by {100 * (ratio - 1):+.1f} % (more than {MAX_STRETCH:.0%}); it may sound unnatural.")
         audio = time_stretch(load_stereo(t.path), ratio)
-        audio *= target_rms / _rms_loud(audio)
+        # Match tracks by perceived loudness (BS.1770, gated) rather than RMS, so the level does not
+        # jump at a blend between a dense master and a more open one; RMS only if LUFS is undefined.
+        lufs = integrated_lufs(audio)
+        if np.isfinite(lufs):
+            audio *= 10 ** ((TRACK_LUFS - lufs) / 20)
+        else:
+            audio *= target_rms / _rms_loud(audio)
         expected = t.analysis.first_downbeat / ratio
         # Re-align the phase on the stretched audio (tempo is now exactly `period`): this
         # absorbs any time offset the stretcher introduces. It may report a later bar as
@@ -171,8 +193,12 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         nbars = int((len(audio) / SR - first) // (4 * per))
         prepared.append((t, ratio, audio, first, nbars))
 
-    # 2) Lay out the timeline.
-    n_trans = transition_bars
+    # 2) Lay out the timeline. trans[i] = length in bars of the blend from track i into track i + 1.
+    def _key(t):
+        return t.camelot or t.analysis.camelot
+
+    trans = [clash_bars if clash_bars and compatibility(_key(a), _key(b)) == "clash" else transition_bars
+             for a, b in zip(tracks, tracks[1:])]
     placements = []  # (start_sample, audio, first_downbeat_s, mix_out_bar, nbars)
     cursor_start = 0.0
     for i, (t, ratio, audio, first, nbars) in enumerate(prepared):
@@ -187,10 +213,15 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
             if start < cursor_start:
                 warnings.append(f"{t.title}: its intro is longer than the previous track allows; shifted later.")
         # Mix-out bar for this track: last phrase boundary leaving room for a full transition.
-        last_start = nbars - n_trans
+        n_out = trans[i] if i < len(prepared) - 1 else 0
+        last_start = nbars - n_out
         out_bar = max(phrase_bars, (last_start // phrase_bars) * phrase_bars) if i < len(prepared) - 1 else nbars
         if i < len(prepared) - 1 and last_start < phrase_bars:
-            raise ValueError(f"{t.title} is too short for a {n_trans}-bar transition")
+            raise ValueError(f"{t.title} is too short for a {n_out}-bar transition")
+        n_in = trans[i - 1] if i > 0 else 0
+        if 0 < i < len(prepared) - 1 and out_bar < n_in:
+            # Its mix-out would start inside the incoming blend: three tracks would overlap.
+            raise ValueError(f"{t.title} is too short for a {n_in}-bar blend in and a {n_out}-bar blend out")
         placements.append((start, audio, first, out_bar, nbars))
         cursor_start = start
 
@@ -198,7 +229,7 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
     ends = []
     for i, (start, audio, first, out_bar, nbars) in enumerate(placements):
         if i < len(placements) - 1:
-            ends.append(start + first + (out_bar + n_trans) * bar)
+            ends.append(start + first + (out_bar + trans[i]) * bar)
         else:
             ends.append(start + len(audio) / SR)
     total = int(np.ceil(max(ends) * SR)) + SR
@@ -216,17 +247,18 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         low, high = _split(seg)
         g_low = np.ones(length)
         g_high = np.ones(length)
-        half = n_trans // 2
         # Incoming: highs rise over the first half, bass enters at the swap (1-bar ramp).
         if i > 0:
+            half = trans[i - 1] // 2
             a = int(round(first * SR))
             g_high *= _ramp(length, a, a + int(half * bar * SR), rising=True)
             g_low *= _ramp(length, a + int(half * bar * SR), a + int((half + 1) * bar * SR), rising=True)
         # Outgoing: bass leaves at the swap, highs fall over the second half.
         if i < len(placements) - 1:
+            half = trans[i] // 2
             m = int(round((first + out_bar * bar) * SR))
             g_low *= _ramp(length, m + int(half * bar * SR), m + int((half + 1) * bar * SR), rising=False)
-            g_high *= _ramp(length, m + int(half * bar * SR), m + int(n_trans * bar * SR), rising=False)
+            g_high *= _ramp(length, m + int(half * bar * SR), m + int(trans[i] * bar * SR), rising=False)
         track_out = low * g_low[:, None] + high * g_high[:, None]
         e = min(total, s0 + length)
         if s0 < 0:
@@ -242,6 +274,7 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         ))
 
     for i in range(len(placements) - 1):
+        n_trans = trans[i]
         a_start, a_audio, a_first, a_out, _ = placements[i]
         b_start, b_audio, b_first, _, _ = placements[i + 1]
         t_start = a_start + a_first + a_out * bar
@@ -251,10 +284,11 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         ib0 = int(round((t_start - b_start) * SR))
         if ib0 < 0:  # incoming downbeat at (or a hair before) sample 0: skip the first few samples of both
             ia0, ib0 = ia0 - ib0, 0
-        chunk = int(4 * bar * SR)
+        chunk_bars = min(4, n_trans)  # short (clash) blends are measured too
+        chunk = int(chunk_bars * bar * SR)
         chunks = []
         beatless = 0
-        for c in range(n_trans // 4):
+        for c in range(n_trans // chunk_bars):
             ia, ib = ia0 + c * chunk, ib0 + c * chunk
             if ia + chunk <= len(a_audio) and ib + chunk <= len(b_audio):
                 sa, sb = a_audio[ia : ia + chunk], b_audio[ib : ib + chunk]
@@ -271,7 +305,7 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
             from_title=placed[i].title, to_title=placed[i + 1].title, start=t_start,
             bass_swap=t_start + n_trans // 2 * bar, end=t_start + n_trans * bar, bars=n_trans,
             key_relation=compatibility(ka, kb), measured_offset_ms=offset, chunk_offsets_ms=chunks,
-            beatless_chunks=beatless,
+            beatless_chunks=beatless, chunk_bars=chunk_bars,
         ))
 
     # 4) Samples (loops / one-shots) on top of the blended tracks, before mastering.
@@ -283,10 +317,10 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         for ps in placed_samples:
             warnings.extend(f"sample {ps.title}: {n}" for n in ps.notes if "unnatural" in n or "cut" in n)
 
-    # 5) Master: soft-limit and normalise to -1 dBFS peak.
-    peak = np.max(np.abs(mix)) or 1.0
-    if peak > 0.9:
-        mix = np.tanh(mix / peak * 1.5) / np.tanh(1.5)
-    mix *= 10 ** (-1 / 20) / (np.max(np.abs(mix)) or 1.0)
+    # 5) Master: loudness target with a true-peak limiter (see master.py).
+    mix, report = master(mix, target_lufs=target_lufs)
+    if target_lufs is not None and report.lufs < target_lufs - 0.5:
+        warnings.append(f"master: reached {report.lufs:.1f} LUFS, not {target_lufs:g}: louder would need more than "
+                        f"{report.max_reduction_db:.0f} dB of limiting, which crushes the drums.")
     return MixResult(audio=mix.astype(np.float32), bpm=round(target, 2), tracks=placed, transitions=transitions,
-                     warnings=warnings, samples=placed_samples)
+                     warnings=warnings, samples=placed_samples, master=report)

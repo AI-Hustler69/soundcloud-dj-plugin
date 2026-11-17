@@ -1,7 +1,7 @@
 {
   "name": "soundcloud-dj",
   "displayName": "SoundCloud DJ Crate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Find SoundCloud tracks with artist-enabled free downloads, check their licenses, and build DJ sets ordered by BPM and Camelot key for harmonic mixing. Metadata and links only: never downloads, rips streams or bypasses download gates.",
   "author": {
     "name": "AI-Hustler69",

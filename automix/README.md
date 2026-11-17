@@ -56,6 +56,13 @@ Options:
 - `--bars 32` sets a longer blend.
 - `--auto-order` sorts the crate by BPM and Camelot compatibility.
 - `--bpm-range 120 135` sets the tempo range for house or techno. The default is 160–190 (drum & bass).
+- `--clash-bars 8` gives transitions between clashing keys a shorter blend.
+- `--lufs -9` sets the master loudness (default -9 LUFS); `--no-limiter` turns the limiter off and only sets the true peak to -1.5 dBTP.
+
+The master: every track is levelled by integrated loudness (ITU-R BS.1770) before blending, the mix is
+brought to the loudness target with a look-ahead true-peak limiter (ceiling -1.5 dBTP, at most 12 dB of
+gain reduction; the tracklist warns if the target needs more), and the MP3 is decoded and measured after
+encoding and re-encoded quieter if it would go over -1 dBTP.
 
 To inspect tracks without mixing:
 

@@ -142,8 +142,9 @@ def test_key_relations_use_metadata(mix):
 
 
 def test_master_is_not_clipping_and_has_expected_length(mix):
-    peak = float(np.max(np.abs(mix.audio)))
-    assert 0.85 < peak <= 10 ** (-1 / 20) + 1e-4
+    from automix.mixer import TRUE_PEAK_CEILING_DB, true_peak
+    assert 20 * np.log10(true_peak(mix.audio)) <= TRUE_PEAK_CEILING_DB + 0.05
+    assert float(np.max(np.abs(mix.audio))) > 0.6
     # 3 tracks of 48 bars, two 16-bar overlaps -> about 48*3 - 32 = 112 bars plus tails.
     assert 112 * 4 * 60 / 174.0 < mix.duration < 125 * 4 * 60 / 174.0
 
@@ -203,3 +204,78 @@ def test_timestamp_format():
     assert ts(0) == "00:00"
     assert ts(75.4) == "01:15"
     assert ts(3725) == "1:02:05"
+
+
+def test_true_peak_catches_inter_sample_overs():
+    from automix.mixer import true_peak
+    # A sine at fs/4 sampled at 45 degrees: every sample is 0.707, the waveform peaks at 1.0 between them.
+    n = np.arange(4096)
+    x = np.sin(2 * np.pi * n / 4 + np.pi / 4)
+    stereo = np.stack([x, x], axis=1) * 0.9
+    assert np.max(np.abs(stereo)) == pytest.approx(0.9 * 0.7071, abs=1e-3)
+    assert true_peak(stereo) == pytest.approx(0.9, abs=0.02)
+    # chunked and unchunked agree
+    assert true_peak(stereo, chunk=1000) == pytest.approx(true_peak(stereo), abs=1e-6)
+
+
+def test_master_stays_under_true_peak_ceiling(mix):
+    from automix.mixer import TRUE_PEAK_CEILING_DB, true_peak
+    tp_db = 20 * np.log10(true_peak(mix.audio))
+    assert TRUE_PEAK_CEILING_DB - 0.3 <= tp_db <= TRUE_PEAK_CEILING_DB + 0.05
+
+
+def test_master_reaches_the_loudness_target(mix):
+    from automix.master import DEFAULT_TARGET_LUFS, integrated_lufs
+    assert mix.master.target_lufs == DEFAULT_TARGET_LUFS
+    from automix.master import MAX_REDUCTION_DB
+    lufs = integrated_lufs(mix.audio)
+    assert mix.master.lufs == pytest.approx(lufs, abs=0.05)
+    # Either the target is met, or the limiter stopped at its cap and the mix says so.
+    if abs(lufs - DEFAULT_TARGET_LUFS) > 0.3:
+        assert mix.master.max_reduction_db == pytest.approx(MAX_REDUCTION_DB, abs=0.1)
+        assert lufs < DEFAULT_TARGET_LUFS
+        assert any(w.startswith("master: reached") for w in mix.warnings)
+    assert lufs > -12  # the synthetic crate's sharp clicks still get within a few LU
+
+
+def test_clash_bars_shortens_only_clashing_blends(crate):
+    from dataclasses import replace
+    # One -> Two adjacent (8A -> 9A); make Two -> Three a clash (9A -> 3A).
+    tracks = [crate[0], crate[1], replace(crate[2], camelot="3A")]
+    res = render_mix(tracks, transition_bars=16, clash_bars=8, target_lufs=None)
+    assert [t.key_relation for t in res.transitions] == ["adjacent", "clash"]
+    assert [t.bars for t in res.transitions] == [16, 8]
+    bar = 240 / res.bpm
+    assert res.transitions[1].end - res.transitions[1].start == pytest.approx(8 * bar, abs=1e-6)
+    with pytest.raises(ValueError):
+        render_mix(tracks, clash_bars=5)
+
+
+def test_short_middle_track_cannot_overlap_three_tracks(crate):
+    from dataclasses import replace
+    # Two is cut to 16 bars: a 16-bar blend in and an 8-bar clash blend out cannot both fit.
+    tracks = [crate[0], crate[1], replace(crate[2], camelot="3A")]
+    import automix.mixer as mx
+    real_stretch = mx.time_stretch
+    try:
+        calls = []
+
+        def cut_second(audio, ratio):  # only the middle track is cut, to 22 bars
+            out = real_stretch(audio, ratio)
+            calls.append(1)
+            return out[: int(22 * 240 / 174 * mx.SR)] if len(calls) == 2 else out
+
+        mx.time_stretch = cut_second
+        with pytest.raises(ValueError, match="blend in"):
+            render_mix(tracks, transition_bars=16, clash_bars=8, target_lufs=None)
+    finally:
+        mx.time_stretch = real_stretch
+
+
+def test_short_clash_blends_are_still_measured(crate):
+    from dataclasses import replace
+    tracks = [crate[0], replace(crate[1], camelot="3A")]
+    res = render_mix(tracks, transition_bars=16, clash_bars=2, target_lufs=None)
+    tr = res.transitions[0]
+    assert tr.bars == 2 and tr.chunk_bars == 2
+    assert tr.measured_offset_ms is not None and abs(tr.measured_offset_ms) < 5
