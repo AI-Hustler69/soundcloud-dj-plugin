@@ -239,7 +239,10 @@ The `dj-automix` skill sets up the tool on first use and then:
 1. measures each track's tempo, beat grid and key;
 2. time-stretches all tracks to one tempo without changing pitch;
 3. blends them on 8-bar phrase boundaries with a 16-bar bass-swap transition;
-4. writes `mix.mp3`, `mix.wav`, a tracklist, a `.cue` file and a JSON report with the measured beat alignment of every transition.
+4. masters the mix to a loudness target (-9 LUFS by default) with a true-peak limiter, so neither the WAV nor the MP3 clips;
+5. writes `mix.mp3`, `mix.wav`, a tracklist, a `.cue` file and a JSON report with the measured beat alignment of every transition and the master's loudness.
+
+Where two keys clash, `--clash-bars 8` makes that blend shorter.
 
 It needs Python 3.11+ and ffmpeg built with `rubberband`. You can also run it by hand or try a demo without any music; see [`automix/README.md`](automix/README.md).
 
