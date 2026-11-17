@@ -8,11 +8,12 @@ from scipy.signal import butter, correlate, sosfiltfilt
 
 from .analysis import TrackAnalysis, _fit_downbeats
 from .keys import compatibility
-from .master import DEFAULT_TARGET_LUFS, TRUE_PEAK_CEILING_DB, MasterReport, master, true_peak  # noqa: F401
+from .master import DEFAULT_TARGET_LUFS, TRUE_PEAK_CEILING_DB, MasterReport, integrated_lufs, master, true_peak  # noqa: F401
 from .stretch import SR, load_stereo, time_stretch
 
 CROSSOVER_HZ = 180.0
 MAX_STRETCH = 0.08  # warn above +-8 %
+TRACK_LUFS = -14.0  # every track is levelled to this before blending (the master sets the final loudness)
 
 
 @dataclass
@@ -176,7 +177,13 @@ def render_mix(tracks: list[TrackInput], bpm: float | None = None, transition_ba
         if abs(ratio - 1) > MAX_STRETCH:
             warnings.append(f"{t.title}: tempo changed by {100 * (ratio - 1):+.1f} % (more than {MAX_STRETCH:.0%}); it may sound unnatural.")
         audio = time_stretch(load_stereo(t.path), ratio)
-        audio *= target_rms / _rms_loud(audio)
+        # Match tracks by perceived loudness (BS.1770, gated) rather than RMS, so the level does not
+        # jump at a blend between a dense master and a more open one; RMS only if LUFS is undefined.
+        lufs = integrated_lufs(audio)
+        if np.isfinite(lufs):
+            audio *= 10 ** ((TRACK_LUFS - lufs) / 20)
+        else:
+            audio *= target_rms / _rms_loud(audio)
         expected = t.analysis.first_downbeat / ratio
         # Re-align the phase on the stretched audio (tempo is now exactly `period`): this
         # absorbs any time offset the stretcher introduces. It may report a later bar as

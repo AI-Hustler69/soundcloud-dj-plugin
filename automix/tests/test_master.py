@@ -86,3 +86,16 @@ def test_master_handles_undefined_loudness_and_bad_samples():
     bad[100, 0] = np.nan
     with pytest.raises(ValueError):
         master(bad)
+
+
+def test_mp3_is_kept_under_its_true_peak_ceiling(tmp_path):
+    import soundfile as sf
+    from automix.report import MP3_CEILING_DB, _encode_mp3, _mp3_true_peak
+    rng = np.random.default_rng(4)
+    x = rng.standard_normal((10 * SR, 2)) * 0.2
+    y, _ = master(x, target_lufs=-6.0, ceiling_db=-1.5)  # hard-limited: the encoder overshoots this
+    wav = tmp_path / "loud.wav"
+    sf.write(wav, y, SR, subtype="PCM_16")
+    tp = _encode_mp3(wav, tmp_path / "loud.mp3")
+    assert tp <= MP3_CEILING_DB + 0.05
+    assert _mp3_true_peak(tmp_path / "loud.mp3") == pytest.approx(tp, abs=0.01)

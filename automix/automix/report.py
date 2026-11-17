@@ -68,6 +68,32 @@ def cue_sheet(result: MixResult, audio_name: str) -> str:
     return "\n".join(out) + "\n"
 
 
+MP3_CEILING_DB = -1.0  # the decoded MP3 must stay under this true peak
+
+
+def _mp3_true_peak(path: Path) -> float:
+    from .master import true_peak
+
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(SR), "-"],
+                         check=True, capture_output=True).stdout
+    x = np.frombuffer(raw, dtype=np.float32).reshape(-1, 2)
+    tp = true_peak(x)
+    return 20 * np.log10(tp) if tp > 0 else float("-inf")
+
+
+def _encode_mp3(wav: Path, mp3_path: Path) -> float:
+    """Encode at 320 kbps; the encoder can overshoot a limited master by 1-2 dB, so measure the decoded
+    file and, if needed, encode once more with that much less gain. Returns the MP3's true peak in dBTP."""
+    cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k"]
+    subprocess.run(cmd + [str(mp3_path)], check=True)
+    tp = _mp3_true_peak(mp3_path)
+    if tp > MP3_CEILING_DB:
+        trim = MP3_CEILING_DB - 0.2 - tp
+        subprocess.run(cmd[:-4] + ["-af", f"volume={trim:.2f}dB"] + cmd[-4:] + [str(mp3_path)], check=True)
+        tp = _mp3_true_peak(mp3_path)
+    return tp
+
+
 def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> dict[str, str]:
     base = Path(out_base)
     base.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +102,7 @@ def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> 
     files = {"wav": str(wav)}
     if mp3:
         mp3_path = base.with_suffix(".mp3")
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k", str(mp3_path)], check=True)
+        mp3_tp = _encode_mp3(wav, mp3_path)
         files["mp3"] = str(mp3_path)
     txt = base.with_suffix(".tracklist.txt")
     txt.write_text(tracklist(result), encoding="utf-8")
@@ -92,6 +118,7 @@ def write_outputs(result: MixResult, out_base: str | Path, mp3: bool = True) -> 
         "tracks": [asdict(t) for t in result.tracks],
         "transitions": [asdict(t) for t in result.transitions],
         "samples": [asdict(s) for s in result.samples],
+        "mp3_true_peak_db": round(mp3_tp, 2) if mp3 and np.isfinite(mp3_tp) else None,
         "warnings": result.warnings, "license_note": LICENSE_NOTE,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     files["json"] = str(js)
