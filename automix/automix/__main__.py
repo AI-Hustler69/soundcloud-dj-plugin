@@ -60,10 +60,36 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--bpm-range", nargs=2, type=float, default=(160, 190), metavar=("LO", "HI"))
     m.add_argument("--no-mp3", action="store_true")
 
+    v = sub.add_parser("visuals", help="render an audio-reactive video of a mix (YouTube set or vertical reel)")
+    v.add_argument("audio", help="the mix (mp3/wav), or any audio file")
+    v.add_argument("-o", "--out", required=True, help="output .mp4")
+    v.add_argument("--mix-json", help="the JSON report of 'automix mix' (track titles, colours per track, drops)")
+    v.add_argument("--format", default="youtube", choices=["youtube", "reel", "square"])
+    v.add_argument("--start", type=float, help="start second (default 0)")
+    v.add_argument("--duration", type=float, help="length in seconds (default: to the end; 30 for --reel-auto)")
+    v.add_argument("--reel-auto", action="store_true", help="pick the most energetic drop (from the mix JSON)")
+    v.add_argument("--title", default="", help="header text, e.g. 'DJ NAME - JUMP UP SESSION'")
+    v.add_argument("--palette", default="neon", choices=["neon", "ice", "fire", "toxic"])
+    v.add_argument("--fps", type=int, default=30)
+    v.add_argument("--stills", type=int, default=0, help="also save N preview PNGs")
+    v.add_argument("--workers", type=int, help="render processes (default: CPU cores - 1)")
+    v.add_argument("--preset", default="veryfast", help="x264 preset (slower = smaller file)")
+
     d = sub.add_parser("demo", help="generate synthetic tracks and mix them (no third-party audio)")
     d.add_argument("-o", "--out", default="out/demo/mix")
 
     args = ap.parse_args(argv)
+
+    if args.cmd == "visuals":
+        from .visuals import _print_progress, render_visuals
+
+        res = render_visuals(args.audio, args.out, fmt=args.format, mix_json=args.mix_json, start=args.start,
+                             duration=args.duration, reel_auto=args.reel_auto, fps=args.fps, palette=args.palette,
+                             header=args.title, stills=args.stills, workers=args.workers, preset=args.preset,
+                             progress=_print_progress)
+        print(json.dumps({"video": res.path, "start": res.start, "duration": res.duration, "size": res.size,
+                          "frames": res.frames, "stills": res.stills}, indent=2))
+        return 0
 
     if args.cmd == "analyze":
         for f in args.files:

@@ -248,6 +248,15 @@ It needs Python 3.11+ and ffmpeg built with `rubberband`. You can also run it by
 
 You can also add **samples** (loops, horns, vocal shots, risers): tell Claude where they should go, for example "a horn on every transition, and my perc loop for 8 bars before the second one". Loops are synced to the mix tempo, and one-shots land on the beat. The crate format is described in [`automix/README.md`](automix/README.md#samples-loops-and-one-shots).
 
+### A video for the mix
+
+Ask Claude for a video, and the `dj-visuals` skill renders one from the mix:
+
+- "Make a YouTube video of the whole set, title 'DJ NAME - JUMP UP SESSION'."
+- "Make a 30-second Instagram reel from the best drop of the mix."
+
+The visuals react separately to the kick (the centre orb swells), the snare (shockwave rings) and the hi-hats (sparkling particles), and the bass drives the tunnel behind them. Each track gets its own colour, crossfaded during blends, and its title appears when it starts, all taken from the mix's JSON report. Formats: 1920x1080, 1080x1920 for reels and 1080x1080. Everything is rendered locally with numpy and ffmpeg: no GPU, no API key, no third-party visuals. See [`automix/README.md`](automix/README.md#video-for-a-mix).
+
 It is a prototype:
 - it assumes constant-tempo 4/4 music with a kick on the downbeat (drum & bass, house, techno);
 - keys estimated from audio can be wrong, so keys from SoundCloud metadata are preferred;

@@ -21,11 +21,21 @@ The tool lives in `${CLAUDE_PLUGIN_ROOT}/automix`. Create its Python environment
 ffmpeg -hide_banner -filters | grep -q rubberband && echo "ffmpeg ok" || echo "ffmpeg without rubberband"
 ```
 
+macOS and Linux:
+
 ```bash
-python3 -m venv "${CLAUDE_PLUGIN_DATA}/automix-venv" && "${CLAUDE_PLUGIN_DATA}/automix-venv/bin/pip" install -q -r "${CLAUDE_PLUGIN_ROOT}/automix/requirements.txt"
+python3 -m venv "${CLAUDE_PLUGIN_DATA}/automix-venv" && "${CLAUDE_PLUGIN_DATA}/automix-venv/bin/python" -m pip install -q -r "${CLAUDE_PLUGIN_ROOT}/automix/requirements.txt"
 ```
 
-- If ffmpeg is missing or built without rubberband, tell the user how to install it (for example `brew install ffmpeg` on macOS, or a full ffmpeg build on Linux) and stop.
+Windows (Claude Code runs Git Bash there; a venv has `Scripts/python.exe` instead of `bin/python`):
+
+```bash
+python -m venv "${CLAUDE_PLUGIN_DATA}/automix-venv" && "${CLAUDE_PLUGIN_DATA}/automix-venv/Scripts/python.exe" -m pip install -q -r "${CLAUDE_PLUGIN_ROOT}/automix/requirements.txt"
+```
+
+Below, `PY` stands for `${CLAUDE_PLUGIN_DATA}/automix-venv/bin/python`, or `${CLAUDE_PLUGIN_DATA}/automix-venv/Scripts/python.exe` on Windows.
+
+- If ffmpeg is missing or built without rubberband, tell the user how to install it and stop: `brew install ffmpeg` on macOS, the "full" build from gyan.dev on Windows (put its `bin` folder on PATH), or a full ffmpeg build on Linux.
 - Python 3.11 or newer is required.
 
 ## 2. Build the crate file
@@ -67,7 +77,7 @@ If the user does not say where samples should go, propose positions that DJs typ
 Run it from the tool's folder so the `automix` package is importable:
 
 ```bash
-cd "${CLAUDE_PLUGIN_ROOT}/automix" && "${CLAUDE_PLUGIN_DATA}/automix-venv/bin/python" -m automix mix --crate /abs/path/crate.json -o /abs/path/out/mix
+cd "${CLAUDE_PLUGIN_ROOT}/automix" && PY -m automix mix --crate /abs/path/crate.json -o /abs/path/out/mix
 ```
 
 Options:
@@ -83,7 +93,7 @@ The master is limited to that loudness under a -1.5 dBTP true-peak ceiling, and 
 
 Write the output next to the user's files or in their project, not inside `${CLAUDE_PLUGIN_ROOT}`, which is replaced on update.
 
-To try the tool without any music, `... -m automix demo -o /abs/path/out/demo/mix` builds four synthetic tracks and mixes them.
+To try the tool without any music, `PY -m automix demo -o /abs/path/out/demo/mix` (from the same folder) builds four synthetic tracks and mixes them.
 
 ## 4. Report back
 
@@ -96,6 +106,8 @@ Read the printed tracklist (also written to `mix.tracklist.txt`) and tell the us
 - every warning (for example a tempo change above 8 %, or a track too short for the transition);
 - every sample with its time, type (loop or one-shot), tempo change and anchor;
 - the license note. It covers samples too: sample packs have their own licenses.
+
+Then offer a video: the `dj-visuals` skill turns the mix (with its `mix.json`) into a YouTube video or a vertical reel of the best drop.
 
 ## Limits to mention when relevant
 

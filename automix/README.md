@@ -103,6 +103,28 @@ Put samples on top of the mix (horns, vocal shots, impacts, percussion loops, ri
 
 The tracklist lists every sample with its time, type, tempo change and anchor. The same licensing rules apply to samples: use only packs whose license allows them in a published mix.
 
+## Video for a mix
+
+`visuals` renders an audio-reactive MP4 of a mix: the whole set for YouTube, a vertical reel or a square clip.
+
+```bash
+.venv/bin/python -m automix visuals out/mymix.mp3 --mix-json out/mymix.json -o out/mymix_youtube.mp4 --title "DJ NAME - SESSION" --stills 4
+```
+
+```bash
+.venv/bin/python -m automix visuals out/mymix.mp3 --mix-json out/mymix.json --format reel --reel-auto --duration 30 -o out/mymix_reel.mp4
+```
+
+- **Drums from the mixed audio:** kick (35–120 Hz), snare (1.2–4.5 kHz) and hats (7–14 kHz) are taken as spectral flux in their own bands, normalised to the local level so breakdowns and drops both react. No stems are needed.
+- **What reacts:**
+  - kick: the orb swells;
+  - snare: shockwave rings and a flash;
+  - hats: particles and a rim ripple;
+  - bass and level: the tunnel.
+- **From the mix JSON:** each track's colour (crossfaded over its blend), its title (shown once its blend is over) and the drops. `--reel-auto` starts 8 bars before the bass swap with the most energy after it.
+- **Options:** `--format youtube|reel|square`, `--start`/`--duration`, `--palette neon|ice|fire|toxic`, `--fps`, `--workers` (default: CPU cores - 1), `--preset` (x264).
+- **Speed:** frames are stateless (tunnel phase and particle travel are integrated up front), so they render in parallel processes. Radial elements use 1-D lookup tables, the glow is computed at quarter size, and ffmpeg scales the frames up. A 4-core machine renders about real time.
+
 ## Tests
 
 ```bash

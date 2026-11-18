@@ -1,6 +1,6 @@
 {
   "name": "soundcloud-dj-mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "SoundCloud MCP server and Claude Code plugin: find free-download tracks, check Creative Commons licenses, and build DJ sets by BPM and Camelot key. Metadata and links only; never downloads or rips audio.",
   "license": "MIT",
   "type": "module",
